@@ -1,0 +1,144 @@
+---
+title: "Human_Activity_Recognition_Project"
+author: "Michelle Fukunaga"
+date: "1/6/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Background
+The datasets for this assignment came from a research that was done to predict the quality of executing an activity by using sensor and model based approach.  The research was unique in that traditionally the focus had been on "which" activities were performed, and less on "how well".
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz51NKX458g
+and http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201
+
+## Data
+The dataset contained 5 classes (sitting-down, standing-up, standing, walking, and sitting) collected on 8 hours of activities of 4 healthy subjects.  Specifically, the activities were accelerometers on the belt, forearm, arm, and dumbell. The subjects were asked to perform barbell lifts correctly and incorrectly in 5 different ways. A baseline performance index was established such that class A corresponds to the specified execution of the exercise, while the other 4 classes (B, C, D, E) correspond to common mistakes.
+
+## Modeling and Take Aways
+
+Before applying machine learnings to the dataset, some preprocessing were needed on the 159 predictors. The sample dataset was sparsely populated.  For example, 15 predictors did not have any values populated. A significant list of other predictors had over 90% missing values out of the 19,622 observations. To reduce noise, I excluded a few of the predictors without importance (i.e. subject's name), and the 15 with 100% missing value. I used predictive mean matching as a method to impute data for the rest of predictors.
+
+Next, 75% of the data was partitioned into training the models. 25% of the data was used for out of bag testing. The results from 7 classification models are displayed below.  The top model was selected based on test accuracy rate. Cross validation and tuning parameters were chosen at default by the Caret package.  The best results were achieved by gbm and an ensemble method (gbm and qda) at 96.82%. Runner up were qda and svm at 91.7% and 71.4% test accuracy.  Based on this information, the true relationship between the predictors and response were most likely non linear.  
+
+
+
+## Processing
+```{r, echo=TRUE}
+
+#download training data
+url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+train = read.csv(file=url,stringsAsFactors = FALSE,na.strings=c(""," ","NA"))
+
+#download validation dataset
+url_test = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+validateData = read.csv(file=url_test,stringsAsFactors = FALSE,na.strings=c(""," ","NA"))
+
+#remove predictors without importance
+train2 = subset(train, select = -c(X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, new_window, num_window))
+train2$classe = as.factor(train2$classe)
+
+#summary(train2)
+
+#replace char vector with numeric
+w <- which( sapply(train2, class) == 'character' )
+names(train2[w])
+train2[w] <- lapply( train2[w], function(x) as.numeric(x))
+
+#Missing Values
+library(VIM)
+missing_value_plot = aggr(train2, numbers=TRUE, sortVar=TRUE,
+     labels=names(train2),gap=3,ylab=c("Missing data","Pattern"))
+
+#remove variables with 100% missing value
+train3 = subset(train2, select = -c(kurtosis_yaw_belt, 
+                                    skewness_yaw_belt, 
+                                    kurtosis_yaw_dumbbell, 
+                                    skewness_yaw_dumbbell, 
+                                    kurtosis_yaw_forearm, 
+                                    skewness_yaw_forearm,
+                                    max_yaw_forearm,
+                                    min_yaw_forearm,
+                                    amplitude_yaw_forearm,
+                                    max_yaw_belt,
+                                    min_yaw_belt,
+                                    amplitude_yaw_belt,
+                                    max_yaw_dumbbell,
+                                    min_yaw_dumbbell,
+                                    amplitude_yaw_dumbbell))
+
+
+#imput rest of missing values
+library(mice)
+
+#impute using predictive mean matching
+train3_imputed = mice(train3, m=1, maxit = 20, method = 'pmm', seed=500)
+
+train3_complete = complete(train3_imputed,1)
+
+
+```
+
+```{r, echo=TRUE}
+## Machine Learning
+library(caret)
+set.seed(12345)
+
+inTrain = createDataPartition(train3_complete$classe, p = 3/4)[[1]]
+trainData = train3_complete[inTrain,]
+testData = train3_complete[-inTrain,]
+
+#machine learning models
+tree = train(classe~., data=trainData,method="rpart")
+treePred = predict(tree, testData)
+#49.29% test accuracy 
+results=data.frame(row.names=1,method="tree", accuracy=confusionMatrix(treePred,testData$classe)$overall[1])
+
+lda = train(classe~., data=trainData,method="lda")
+ldaPred = predict(lda, testData)
+#89.68% test accuracy 
+results=rbind(results, data.frame(row.names=2,method="lda",accuracy=confusionMatrix(ldaPred,testData$classe)$overall[1]))
+
+qda = train(classe~., data=trainData,method="qda", preProcess=c("center","scale"))
+qdaPred = predict(qda, testData)
+#91.42% test accuracy 
+#quadratic form assumed by qda may capture true relationship more accurately than the linear forms
+#assumed by lda
+results=rbind(results, data.frame(row.names=3,method="qda",accuracy=confusionMatrix(qdaPred,testData$classe)$overall[1]))
+
+knn = train(classe~., data=trainData,method="knn", preProcess=c("center","scale"))
+knnPred = predict(knn, testData)
+#71.49% test accuracy
+
+results=rbind(results, data.frame(row.names=4,method="knn",accuracy=confusionMatrix(knnPred,testData$classe)$overall[1]))
+
+gbm = train(classe~., data=trainData, method="gbm")
+gbmPred = predict(gbm, newdata=testData)
+#150 trees, interaction depth=3, shrinkage=0.1
+#96.82% test accuracy
+results=rbind(results, data.frame(row.names=5,method="gbm",accuracy=confusionMatrix(gbmPred,testData$classe)$overall[1]))
+
+library(e1071)
+svm = svm(classe~., data=trainData)
+predSVM = predict(svm, newdata=testData)
+#91.74% test accuracy
+results=rbind(results, data.frame(row.names=6,method="svm",accuracy=confusionMatrix(predSVM,testData$classe)$overall[1]))
+
+#ensemble method
+predDF = data.frame(gbmPred, qdaPred, classResult=testData$classe)
+combMod = train(classResult~., method="rf",data=predDF)
+combPred = predict(combMod, predDF)
+#96.82% test accuracy
+results=rbind(results, data.frame(row.names=7,method="ensemble",accuracy=confusionMatrix(combPred,testData$classe)$overall[1]))
+
+
+```
+
+```{r, results="asis"}
+print(xtable::xtable(results, caption = "Model and Test Accuracy Table"),
+ type = "html", html.table.attributes = "border=0")
+```
+
